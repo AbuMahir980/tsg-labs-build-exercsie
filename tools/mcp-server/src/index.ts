@@ -21,8 +21,13 @@ const credentialsPath = fileURLToPath(
   new URL("../credentials/google-service-account.json", import.meta.url)
 );
 
+const serviceAccountJson =
+  process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+
 const googleAuth = new google.auth.GoogleAuth({
-  keyFile: credentialsPath,
+  ...(serviceAccountJson
+    ? { credentials: JSON.parse(serviceAccountJson) }
+    : { keyFile: credentialsPath }),
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 
@@ -273,8 +278,492 @@ function createServer(): McpServer {
     }
   );
 
-  
+  server.registerTool(
+    "create_payment",
+    {
+      description:
+        "Create a Paystack test payment for an active Papahandmadeit reservation.",
+      inputSchema: z.object({
+        reservation_id: z.string().min(1),
+        customer_email: z.string().email(),
+      }),
+    },
+    async ({ reservation_id, customer_email }) => {
+      try {
+        const reservationsResponse =
+          await sheets.spreadsheets.values.get({
+            spreadsheetId: GOOGLE_SHEET_ID,
+            range: "RESERVATIONS!A2:K",
+            valueRenderOption: "UNFORMATTED_VALUE",
+          });
 
+        const rows = reservationsResponse.data.values ?? [];
+
+        const rowIndex = rows.findIndex(
+          (row) => String(row[0] ?? "") === reservation_id
+        );
+
+        if (rowIndex === -1) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                reason: "RESERVATION_NOT_FOUND",
+              }),
+            }],
+          };
+        }
+
+        const row = rows[rowIndex];
+        const status = String(row[4] ?? "");
+        const expectedAmountNgn = Number(row[3] ?? 0);
+
+        if (status !== "PAYMENT_PENDING") {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                reason: "RESERVATION_NOT_ACTIVE",
+              }),
+            }],
+          };
+        }
+
+        const paystackResponse = await fetch(
+          "https://api.paystack.co/transaction/initialize",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              email: customer_email,
+              amount: expectedAmountNgn * 100,
+              metadata: {
+                reservation_id,
+              },
+            }),
+          }
+        );
+
+        const paystackData = await paystackResponse.json();
+
+        if (!paystackResponse.ok || !paystackData.status) {
+          throw new Error(
+            paystackData.message ?? "Unable to initialize Paystack payment"
+          );
+        }
+
+        const paymentReference = paystackData.data.reference;
+        const paymentUrl = paystackData.data.authorization_url;
+        const reservationRow = rowIndex + 2;
+
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: GOOGLE_SHEET_ID,
+          range: `RESERVATIONS!F${reservationRow}:G${reservationRow}`,
+          valueInputOption: "RAW",
+          requestBody: {
+            values: [[paymentReference, "PENDING"]],
+          },
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              reservation_id,
+              payment_reference: paymentReference,
+              payment_url: paymentUrl,
+              amount_ngn: expectedAmountNgn,
+              payment_status: "PENDING",
+            }),
+          }],
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              reason: "TOOL_ERROR",
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Unable to create payment",
+            }),
+          }],
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "verify_payment",
+    {
+      description:
+        "Verify the stored Paystack payment for a Papahandmadeit reservation.",
+      inputSchema: z.object({
+        reservation_id: z.string().min(1),
+      }),
+    },
+    async ({ reservation_id }) => {
+      try {
+        const reservationsResponse = await sheets.spreadsheets.values.get({
+          spreadsheetId: GOOGLE_SHEET_ID,
+          range: "RESERVATIONS!A2:K",
+          valueRenderOption: "UNFORMATTED_VALUE",
+        });
+
+        const rows = reservationsResponse.data.values ?? [];
+        const rowIndex = rows.findIndex(
+          (row) => String(row[0] ?? "") === reservation_id
+        );
+
+        if (rowIndex === -1) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                reason: "RESERVATION_NOT_FOUND",
+              }),
+            }],
+          };
+        }
+
+        const row = rows[rowIndex];
+        const sku = String(row[1] ?? "");
+        const quantity = Number(row[2] ?? 0);
+        const expectedAmountNgn = Number(row[3] ?? 0);
+        const reservationStatus = String(row[4] ?? "");
+        const paymentReference = String(row[5] ?? "");
+        const paymentStatus = String(row[6] ?? "");
+
+        // Idempotency: do not update inventory twice.
+        if (
+          reservationStatus === "PAID" &&
+          paymentStatus === "SUCCESS"
+        ) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                verified: true,
+                reservation_id,
+                payment_reference: paymentReference,
+                payment_status: "SUCCESS",
+                amount_ngn: expectedAmountNgn,
+              }),
+            }],
+          };
+        }
+
+        if (!paymentReference) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                reason: "NO_PAYMENT_REFERENCE",
+              }),
+            }],
+          };
+        }
+
+        const response = await fetch(
+          `https://api.paystack.co/transaction/verify/${encodeURIComponent(paymentReference)}`,
+          {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+            },
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || !data.status) {
+          throw new Error(data.message ?? "Unable to verify Paystack payment");
+        }
+
+        const transaction = data.data;
+        const rawStatus = String(transaction.status ?? "").toLowerCase();
+
+        if (rawStatus !== "success") {
+          let normalizedStatus = "PENDING";
+
+          if (rawStatus === "failed") normalizedStatus = "FAILED";
+          if (rawStatus === "expired") normalizedStatus = "EXPIRED";
+          if (rawStatus === "abandoned" || rawStatus === "cancelled") {
+            normalizedStatus = "CANCELLED";
+          }
+
+          await sheets.spreadsheets.values.update({
+            spreadsheetId: GOOGLE_SHEET_ID,
+            range: `RESERVATIONS!G${rowIndex + 2}`,
+            valueInputOption: "RAW",
+            requestBody: {
+              values: [[normalizedStatus]],
+            },
+          });
+
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                verified: false,
+                payment_status: normalizedStatus,
+              }),
+            }],
+          };
+        }
+
+        if (String(transaction.reference) !== paymentReference) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                verified: false,
+                reason: "REFERENCE_MISMATCH",
+              }),
+            }],
+          };
+        }
+
+        if (Number(transaction.amount) !== expectedAmountNgn * 100) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                verified: false,
+                reason: "AMOUNT_MISMATCH",
+              }),
+            }],
+          };
+        }
+
+        const metadataReservationId =
+          transaction.metadata &&
+          typeof transaction.metadata === "object"
+            ? String(transaction.metadata.reservation_id ?? "")
+            : "";
+
+        if (metadataReservationId !== reservation_id) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                verified: false,
+                reason: "RESERVATION_MISMATCH",
+              }),
+            }],
+          };
+        }
+
+        const inventoryResponse = await sheets.spreadsheets.values.get({
+          spreadsheetId: GOOGLE_SHEET_ID,
+          range: "INVENTORY!A2:H",
+          valueRenderOption: "UNFORMATTED_VALUE",
+        });
+
+        const inventoryRows = inventoryResponse.data.values ?? [];
+
+        const inventoryIndex = inventoryRows.findIndex(
+          (inventoryRow) => String(inventoryRow[0] ?? "") === sku
+        );
+
+        if (inventoryIndex === -1) {
+          throw new Error("Inventory item not found");
+        }
+
+        const inventoryRow = inventoryRows[inventoryIndex];
+        const reservedCount = Number(inventoryRow[5] ?? 0);
+        const soldCount = Number(inventoryRow[6] ?? 0);
+
+        const paidAt = new Date().toISOString();
+        const reservationRow = rowIndex + 2;
+        const inventorySheetRow = inventoryIndex + 2;
+
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: GOOGLE_SHEET_ID,
+          requestBody: {
+            valueInputOption: "RAW",
+            data: [
+              {
+                range: `INVENTORY!F${inventorySheetRow}:G${inventorySheetRow}`,
+                values: [[
+                  Math.max(0, reservedCount - quantity),
+                  soldCount + quantity,
+                ]],
+              },
+              {
+                range: `RESERVATIONS!E${reservationRow}`,
+                values: [["PAID"]],
+              },
+              {
+                range: `RESERVATIONS!G${reservationRow}`,
+                values: [["SUCCESS"]],
+              },
+              {
+                range: `RESERVATIONS!K${reservationRow}`,
+                values: [[paidAt]],
+              },
+            ],
+          },
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              verified: true,
+              reservation_id,
+              payment_reference: paymentReference,
+              payment_status: "SUCCESS",
+              amount_ngn: expectedAmountNgn,
+            }),
+          }],
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              reason: "TOOL_ERROR",
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Unable to verify payment",
+            }),
+          }],
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "update_fulfilment",
+    {
+      description:
+        "Save pickup or delivery preference for a paid Papahandmadeit reservation.",
+      inputSchema: z.object({
+        reservation_id: z.string().min(1),
+        fulfilment_method: z.enum(["PICKUP", "DELIVERY"]),
+        delivery_address: z.string().optional(),
+      }),
+    },
+    async ({
+      reservation_id,
+      fulfilment_method,
+      delivery_address,
+    }) => {
+      try {
+        const response = await sheets.spreadsheets.values.get({
+          spreadsheetId: GOOGLE_SHEET_ID,
+          range: "RESERVATIONS!A2:K",
+          valueRenderOption: "UNFORMATTED_VALUE",
+        });
+
+        const rows = response.data.values ?? [];
+
+        const rowIndex = rows.findIndex(
+          (row) => String(row[0] ?? "") === reservation_id
+        );
+
+        if (rowIndex === -1) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                reason: "RESERVATION_NOT_FOUND",
+              }),
+            }],
+          };
+        }
+
+        const status = String(rows[rowIndex][4] ?? "");
+
+        if (status !== "PAID") {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                reason: "RESERVATION_NOT_PAID",
+              }),
+            }],
+          };
+        }
+
+        if (
+          fulfilment_method === "DELIVERY" &&
+          !delivery_address?.trim()
+        ) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                reason: "DELIVERY_ADDRESS_REQUIRED",
+              }),
+            }],
+          };
+        }
+
+        const address =
+          fulfilment_method === "DELIVERY"
+            ? delivery_address!.trim()
+            : "";
+
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: GOOGLE_SHEET_ID,
+          range: `RESERVATIONS!H${rowIndex + 2}:I${rowIndex + 2}`,
+          valueInputOption: "RAW",
+          requestBody: {
+            values: [[fulfilment_method, address]],
+          },
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              reservation_id,
+              fulfilment_method,
+              ...(address ? { delivery_address: address } : {}),
+            }),
+          }],
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              reason: "TOOL_ERROR",
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Unable to update fulfilment",
+            }),
+          }],
+        };
+      }
+    }
+  );
   return server;
 };
 
@@ -284,12 +773,39 @@ const nodeHandler = toNodeHandler(handler);
 const validateHost = localhostHostValidation();
 const validateOrigin = localhostOriginValidation();
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT ?? 3000);
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const HOST = IS_PRODUCTION ? "0.0.0.0" : "127.0.0.1";
 
 createHttpServer((req, res) => {
-  if (!validateHost(req, res) || !validateOrigin(req, res)) return;
+  if (!IS_PRODUCTION) {
+    if (!validateHost(req, res) || !validateOrigin(req, res)) return;
+  }
+
+  if (IS_PRODUCTION) {
+    const expectedToken = process.env.MCP_AUTH_TOKEN;
+
+    if (
+      !expectedToken ||
+      req.headers.authorization !== `Bearer ${expectedToken}`
+    ) {
+      res.writeHead(401);
+      res.end("Unauthorized");
+      return;
+    }
+
+    // Server-to-server MCP calls normally have no Origin header.
+    // Reject unexpected browser-origin requests.
+    if (req.headers.origin) {
+      res.writeHead(403);
+      res.end("Forbidden");
+      return;
+    }
+  }
 
   void nodeHandler(req, res);
-}).listen(PORT, "127.0.0.1", () => {
-  console.log(`MCP server running at http://127.0.0.1:${PORT}/mcp`);
+}).listen(PORT, HOST, () => {
+  console.log(
+    `MCP server running on ${HOST}:${PORT}/mcp`
+  );
 });
