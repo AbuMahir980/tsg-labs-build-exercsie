@@ -1,6 +1,7 @@
-import { McpServer } from "@modelcontextprotocol/server";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod";
-
+import { localhostHostValidation, localhostOriginValidation, toNodeHandler, } from "@modelcontextprotocol/node";
+import { createServer as createHttpServer } from "node:http";
 
 function createServer(): McpServer {
 
@@ -36,7 +37,20 @@ function createServer(): McpServer {
   );
 
   return server;
-}
+};
 
-const server = createServer();
-console.log("MCP server created successfully.")
+const handler = createMcpHandler(createServer);
+const nodeHandler = toNodeHandler(handler);
+
+const validateHost = localhostHostValidation();
+const validateOrigin = localhostOriginValidation();
+
+const PORT = 3000;
+
+createHttpServer((req, res) => {
+  if (!validateHost(req, res) || !validateOrigin(req, res)) return;
+
+  void nodeHandler(req, res);
+}).listen(PORT, "127.0.0.1", () => {
+  console.log(`MCP server running at http://127.0.0.1:${PORT}/mcp`);
+});
