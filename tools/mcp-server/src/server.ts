@@ -5,6 +5,7 @@ import { registerCreateReservation } from "./tools/create-reservation.js";
 import { registerCreatePayment } from "./tools/create-payment.js";
 import { registerVerifyPayment } from "./tools/verify-payment.js";
 import { registerUpdateFulfilment } from "./tools/update-fulfilment.js";
+import { registerListAvailableItems } from "./tools/list-available-items.js";
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -17,6 +18,7 @@ export function createMcpServer(): McpServer {
   registerCreatePayment(server);
   registerVerifyPayment(server);
   registerUpdateFulfilment(server);
+  registerListAvailableItems(server);
 
   return server;
 }
