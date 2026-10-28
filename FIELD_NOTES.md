@@ -1,13 +1,15 @@
+# TSG Labs Build Exercise — Deployment Field Notes
+
 ## Real Problem 1
 
-### Problem — Paystack test request failed because of curl formatting
+### Problem — Paystack test request failed because the Authorization header was not sent correctly
 
-**Date/time:** 27 October 2026, evening  
-**Area:** Paystack
+**Date/time:** 27 October 2026, during local integration testing  
+**Area:** Paystack / Tool
 
 **What happened**
 
-I wanted to confirm that my Paystack test secret key was working before building the payment tools. My first request failed instead of returning the account balance.
+While testing the Paystack API from the terminal, the first request failed even though I had already added my Paystack test secret key to the environment.
 
 **Exact error / response**
 
@@ -19,41 +21,37 @@ curl: (3) URL rejected: Malformed input to a URL function
 
 **What I initially suspected**
 
-- I first thought there might be a problem with the Paystack test key or that the environment variable had not loaded properly.
+- I first thought the Paystack test key might be wrong or not loading from the environment.
 
 **How I investigated**
 
-1. I checked whether `PAYSTACK_SECRET_KEY` was actually loaded from `.env`.
-2. The terminal confirmed that the key was loaded.
-3. I then looked at the curl command itself and noticed the multiline formatting was being interpreted wrongly.
-4. I changed the request to a single-line curl command.
+1. I confirmed that the test key existed in my `.env`.
+2. I checked the curl command I had pasted into the terminal.
+3. I noticed that the command formatting caused the Authorization header not to be included properly in the request.
 
 **Root cause**
 
-The Paystack key was fine. The problem was how I entered the multiline curl command. The line-continuation characters caused the command to be read incorrectly, so the Authorization header was not sent properly.
+The problem was not Paystack or the API key. The curl command was formatted incorrectly, so the Authorization header was not being sent as part of the request.
 
 **Fix or workaround**
 
-I used a single-line request instead:
+I corrected the curl command and made sure the Authorization header was passed properly:
 
-```bash
-curl https://api.paystack.co/balance -H "Authorization: Bearer $PAYSTACK_SECRET_KEY"
+```text
+Authorization: Bearer <test-secret-key>
 ```
 
 **How I verified the fix**
 
-Paystack returned:
+I ran the Paystack balance request again and got a successful response showing:
 
 ```text
-status: true
-message: Balances retrieved
+Balances retrieved
 ```
-
-That confirmed that the secret key and Paystack API connection were working.
 
 **What I would improve in Chord / docs / API**
 
-For quick setup checks, it would help to include a single-line curl example as well as the multiline version. It is easier to copy into a terminal and avoids this type of formatting issue.
+A copy-paste-ready example for testing external APIs from the command line would be useful, especially showing correct multiline curl formatting. A small formatting mistake can look like an authentication problem when the real issue is just the request syntax.
 
 **Status:** Resolved
 
@@ -61,54 +59,56 @@ For quick setup checks, it would help to include a single-line curl example as w
 
 ## Real Problem 2
 
-### Problem — TypeScript showed errors for Node APIs even though the server could run
+### Problem — TypeScript showed errors for Node APIs even though the MCP server could run
 
-**Date/time:** 27 October 2026, evening  
-**Area:** Tool / MCP setup
+**Date/time:** 27 October 2026, during MCP server setup  
+**Area:** Tool / TypeScript / MCP
 
 **What happened**
 
-While setting up the MCP HTTP server, VS Code started showing TypeScript errors around Node features such as `node:http`, `node:url` and `process.env`.
+After setting up the TypeScript MCP server, VS Code started showing several TypeScript errors around Node-specific imports and globals such as `process`.
 
-The confusing part was that the MCP server itself could still run.
+The code itself was close to working, but the editor was reporting a lot of problems, which made it look like there were issues with the MCP implementation.
 
 **Exact error / response**
 
 ```text
-The exact VS Code error text was not saved, but the editor highlighted Node imports
-and Node globals such as node:http, node:url and process.env.
+VS Code showed multiple TypeScript errors around Node imports and Node globals such as process.
 ```
+
+There was no single runtime error because this was mainly a TypeScript/editor issue.
 
 **What I initially suspected**
 
-- I thought I might have imported the Node modules wrongly or that there was a problem with the MCP packages.
+- I thought I might be importing the MCP or Node packages incorrectly.
+- I also checked whether the Node version was causing the issue.
 
 **How I investigated**
 
-1. I confirmed that Node itself was installed and working.
-2. I ran the MCP server and confirmed that it could start successfully.
-3. Since the runtime worked but VS Code still complained, I checked the TypeScript setup.
-4. I found that the Node type definitions were not installed.
+1. I checked the Node version and confirmed Node was installed correctly.
+2. I checked the packages already installed in the MCP server.
+3. I noticed that the Node type definitions were missing.
+4. I installed `@types/node`.
 
 **Root cause**
 
-The project did not have `@types/node`, so TypeScript did not have the type information for Node's built-in modules and globals.
+The project had Node installed, but TypeScript did not have the Node type definitions it needed to understand Node APIs and globals.
 
 **Fix or workaround**
 
-I installed the Node type definitions:
+I installed the Node type definitions as a development dependency:
 
-```bash
+```text
 npm install -D @types/node
 ```
 
 **How I verified the fix**
 
-The Node-related TypeScript errors cleared while the MCP server continued to run normally.
+The Node-related TypeScript problems were resolved, and the MCP server continued to run successfully.
 
 **What I would improve in Chord / docs / API**
 
-For a Node + TypeScript MCP example, I would include `@types/node` in the setup steps. Without it, the code can run while the editor still shows errors, which can make it look like the setup is broken.
+For a TypeScript custom MCP example, it would help if the setup instructions explicitly included `@types/node` in the required development dependencies. It is a small dependency, but missing it creates a lot of noise in the editor.
 
 **Status:** Resolved
 
@@ -116,69 +116,271 @@ For a Node + TypeScript MCP example, I would include `@types/node` in the setup 
 
 ## Real Problem 3
 
-### Problem — The basic MCP setup did not directly match the server type Chord needed
+### Problem — The basic MCP setup did not directly match what Chord needed for deployment
 
-**Date/time:** 27 October 2026, evening  
-**Area:** Chord / Tool
+**Date/time:** 27 October 2026, during MCP integration  
+**Area:** Chord / MCP / Deployment
 
 **What happened**
 
-I used the MCP getting-started documentation to create the server and register my first tool.
+When I first started building the MCP server, most of the beginner MCP material I was working from was centred around local MCP usage.
 
-That part was useful, but I then realised that Chord needed the MCP server to be reachable remotely through Streamable HTTP and eventually through a public HTTPS URL.
-
-The basic MCP setup I was following did not take me directly through that full Chord-compatible setup.
-
-**Exact error / response**
-
-```text
-No runtime error.
-
-The issue was that I had to move between the MCP getting-started documentation,
-the HTTP-serving documentation and the Chord MCP documentation to understand
-the complete setup Chord required.
-```
-
-**What I initially suspected**
-
-- At first I thought creating the `McpServer` and registering the tool might be enough for Chord to use it.
-
-**How I investigated**
-
-1. I checked the Chord MCP documentation again.
-2. I confirmed that Chord acts as the MCP client and requires a remote Streamable HTTP server.
-3. I then checked the MCP HTTP-serving documentation.
-4. I added the Node HTTP adapter and exposed the MCP handler through a local `/mcp` endpoint.
-5. I tested the endpoint directly before moving on to the external systems.
-
-**Root cause**
-
-The beginner MCP setup and Chord's actual deployment requirement were at different levels. The beginner guide explained how to build the MCP server and tools, while Chord required the additional HTTP and remote-access setup.
-
-**Fix or workaround**
-
-I kept the MCP server/tool structure from the getting-started guide and added the Streamable HTTP setup separately.
-
-My local MCP endpoint became:
+My server was initially running locally at:
 
 ```text
 http://127.0.0.1:3000/mcp
 ```
 
+Later, when preparing to connect it to Chord, I found that Chord needed a publicly reachable HTTPS MCP server using Streamable HTTP.
+
+So there was an extra deployment step between “my MCP server works locally” and “Chord can actually use it”.
+
+**Exact error / response**
+
+```text
+No single error message.
+
+The local MCP server worked, but a localhost address could not be used as the Chord custom MCP server URL.
+```
+
+**What I initially suspected**
+
+- At first I thought getting the MCP server working locally would be enough to connect it to Chord.
+- I later realised Chord needed a remote Streamable HTTP endpoint.
+
+**How I investigated**
+
+1. I confirmed the MCP tools were working locally with `tools/list`.
+2. I checked Chord's custom MCP requirements.
+3. I changed the server configuration so it could listen on the deployment host and port.
+4. I deployed the MCP server to Render.
+5. I added bearer authentication and registered the public URL in Chord.
+
+**Root cause**
+
+The MCP development setup and the Chord deployment setup are two different stages. Localhost is useful for development, but Chord needs a public HTTPS endpoint.
+
+**Fix or workaround**
+
+I deployed the MCP server to Render and exposed:
+
+```text
+https://<render-service>/mcp
+```
+
+using Streamable HTTP and bearer-token authentication.
+
 **How I verified the fix**
 
-I called `tools/list` against the local MCP endpoint and it successfully returned:
+First, I called `tools/list` against the public Render endpoint and got all five tools.
+
+I then added the server in Chord, and Chord successfully discovered:
 
 ```text
 check_inventory
+create_reservation
+create_payment
+verify_payment
+update_fulfilment
 ```
-
-I later used the same endpoint successfully for `check_inventory`, `create_reservation` and `create_payment`.
 
 **What I would improve in Chord / docs / API**
 
-I would add a very small "Chord-compatible MCP server" example to the Chord docs, showing the full path from creating an MCP server to exposing it through Streamable HTTP.
+It would help to have one small end-to-end TypeScript example in the Chord docs showing the full path:
 
-That would make it easier for someone building their first Chord tool to know which parts of the general MCP documentation they actually need.
+```text
+local MCP server
+→ Streamable HTTP
+→ deploy to public HTTPS
+→ add authentication
+→ register in Chord
+→ confirm tool discovery
+```
+
+That would make the jump from local MCP development to a Chord-ready server much clearer.
+
+**Status:** Resolved
+
+---
+
+## Real Problem 4
+
+### Problem — Skill updates depend on manually uploading a local folder
+
+**Date/time:** 28 October 2026, during teammate setup  
+**Area:** Chord / Skill
+
+**What happened**
+
+When creating the teammate, Chord asked me to upload the Skill as a local file or folder.
+
+This worked, but it made me think about the update workflow. The Skill itself is a `SKILL.md` file with YAML frontmatter, which is already quite developer-oriented. In my case, I am developing the Skill alongside the rest of the project and tracking the project in GitHub.
+
+If I make a change to the Skill later, I have to update the file in my project and then manually upload or update it in Chord again.
+
+**Exact error / response**
+
+```text
+No error message.
+
+The teammate creation flow asked me to choose a local Skill file or folder.
+```
+
+**What I initially suspected**
+
+- I expected there might be an option to connect the Skill directly to a GitHub repository or branch instead of uploading the folder manually.
+
+**How I investigated**
+
+1. I checked the teammate creation flow.
+2. The options available were to choose a local file or folder.
+3. I did not see an option on that screen to connect the Skill directly to a GitHub repository.
+
+**Root cause**
+
+The Skill setup flow I used is upload-based, while my development workflow is source-control based.
+
+**Fix or workaround**
+
+I uploaded the local `papahandmadeit-limited-drop` folder into Chord.
+
+I continue to keep the project version under source control and manually update the Skill in Chord when the Skill changes.
+
+**How I verified the fix**
+
+Chord read the folder correctly and detected:
+
+```text
+papahandmadeit-limited-drop/SKILL.md
+```
+
+The Skill was then published to the teammate successfully.
+
+**What I would improve in Chord / docs / API**
+
+For technical users, it would be useful to support connecting a Skill directly to a GitHub repository and branch, with an option to sync or refresh it when the source changes.
+
+Since creating a `SKILL.md` with YAML frontmatter already assumes some technical familiarity, a Git-based workflow would fit naturally and would reduce the chance of the Skill running in Chord becoming different from the version in the repository.
+
+The local upload option can still remain for users who do not use Git.
+
+**Status:** Workaround
+
+---
+
+## Real Problem 5
+
+### Problem — Inventory worked with the product name but failed with a normal customer sentence
+
+**Date/time:** 28 October 2026, during Chord end-to-end testing  
+**Area:** Chord / MCP Tool / Google Sheets
+
+**What happened**
+
+During the first real test with the Chord teammate, I asked:
+
+```text
+Do you have the Indigo Heritage Shirt in Large?
+```
+
+The teammate checked inventory but told me that the item could not be found.
+
+This was incorrect because the Google Sheet had:
+
+```text
+SKU: PHM-002
+Product: Indigo Heritage Shirt
+Variant: Large
+Available: 4
+```
+
+When I asked again using only:
+
+```text
+Do you have the Indigo Heritage Shirt?
+```
+
+the tool found the item correctly and returned the live inventory.
+
+**Exact error / response**
+
+The first response was essentially:
+
+```text
+The Indigo Heritage Shirt in Large isn't in the listed inventory right now.
+```
+
+The second test returned:
+
+```text
+SKU: PHM-002
+Variant: Large
+Price: ₦35,000
+Available: 4
+```
+
+**What I initially suspected**
+
+- I first wanted to confirm whether the teammate actually had access to the MCP tool.
+- I also considered whether the item name or variant in the Google Sheet was different from what I expected.
+
+**How I investigated**
+
+1. I confirmed that Chord had discovered the `check_inventory` MCP tool.
+2. I tested the same item again without adding “in Large”.
+3. The second request returned the correct live data.
+4. I checked the matching logic inside `check-inventory.ts`.
+5. I found that the search logic was too strict when the model passed a longer natural-language phrase.
+
+**Root cause**
+
+The inventory tool had been designed mainly around clean product-name inputs.
+
+A normal WhatsApp-style input such as:
+
+```text
+Indigo Heritage Shirt in Large
+```
+
+was longer than the stored product name:
+
+```text
+Indigo Heritage Shirt
+```
+
+so the original string matching could fail even though the correct product was present.
+
+**Fix or workaround**
+
+I updated the matching logic so it can recognise the product name inside a longer customer query and can also compare the product name together with the variant.
+
+This allowed normal phrases such as:
+
+```text
+Do you have the Indigo Heritage Shirt in Large?
+```
+
+to find the correct product.
+
+**How I verified the fix**
+
+I pushed the change, allowed Render to redeploy the MCP server, and repeated the original question in Chord.
+
+The teammate then returned:
+
+```text
+Indigo Heritage Shirt
+Large
+₦35,000
+Available: 4
+```
+
+using the live Google Sheet data.
+
+**What I would improve in Chord / docs / API**
+
+Custom-tool examples could make it clearer that tool arguments generated by an AI teammate may come from normal customer language rather than clean database-style values.
+
+A short example showing how to normalise or safely match natural-language arguments before querying an external system would help builders avoid designing tools that only work with perfect test inputs.
 
 **Status:** Resolved
