@@ -1,241 +1,130 @@
 # Papahandmadeit Limited Drop Assistant
 
-A Chord AI teammate that helps Papahandmadeit handle limited-drop sales through a WhatsApp-style conversation.
-
-Built for the **TSG Labs Build Exercise**.
+A Chord teammate built for the TSG Labs Build Exercise.
 
 **Role preference:** Forward-Deployed Engineering
 
-## Problem
+## What it does
 
-Papahandmadeit is an African fashion and visual-art brand that sells handmade clothing inspired by African culture and aesthetics.
+Papahandmadeit is an African fashion and visual-art brand that releases some products in limited quantities through WhatsApp.
 
-Some products are released in limited quantities and promoted through WhatsApp Status. During a drop, customers can message at the same time, and delayed replies can mean that a customer misses an item or that the business has to manually check stock, reserve products and confirm payments.
+This assistant helps a customer:
 
-I built a Chord teammate that handles one limited-drop purchase flow from start to finish. It can check live inventory, reserve an available item, create a Paystack test payment, verify the payment and record whether the customer wants pickup or delivery.
+- check whether an item is available;
+- reserve an item;
+- receive a Paystack test payment link;
+- verify that payment was actually successful;
+- choose pickup or delivery.
 
-I deliberately left out a full e-commerce website, live WhatsApp Business integration, delivery tracking and production payment credentials. The goal was to build a small end-to-end workflow that works reliably before expanding the scope.
+The inventory and reservation data are stored in Google Sheets for the exercise.
 
-## How It Works
+## Architecture
 
-The flow is:
+```text id="nw8q4h"
+WhatsApp Simulator
+        ↓
+      Chord
+        ↓
+Papahandmadeit Skill
+        ↓
+ Custom MCP Server
+     ↙       ↘
+Google Sheets   Paystack
+```
 
-Customer  
-→ WhatsApp Simulator  
-→ Chord teammate  
-→ Papahandmadeit Skill  
-→ Custom MCP server  
-→ Google Sheets / Paystack
-
-The Google Sheet acts as the inventory and reservation store for the demo.
-
-Paystack is used only in **test mode**.
-
-## Customer Flow
-
-A typical conversation works like this:
-
-1. Customer asks if an item is available.
-2. The agent checks the live inventory.
-3. Customer agrees to reserve an item.
-4. The agent checks inventory again before creating the reservation.
-5. A reservation is created and the available quantity is updated.
-6. The agent asks for an email address if needed for payment.
-7. A Paystack test payment is created for the amount stored against the reservation.
-8. Customer completes the payment.
-9. Customer tells the agent they have paid.
-10. The agent independently verifies the payment with Paystack.
-11. Only a successful payment with the correct amount and reservation reference is accepted.
-12. The customer chooses pickup or delivery.
-13. The fulfilment preference is saved against the reservation.
-
-The agent does not treat a customer's message saying “I have paid” as proof of payment.
+The MCP server is deployed publicly so Chord can call the custom tools.
 
 ## Custom Tools
 
-The MCP server exposes the following tools to Chord.
+The project includes these MCP tools:
 
-### `check_inventory`
+- `check_inventory` — checks one item and returns its current stock, variant and price.
+- `list_available_items` — lists products that currently have stock available.
+- `create_reservation` — rechecks stock and creates a reservation.
+- `create_payment` — creates a Paystack test transaction for a reservation.
+- `verify_payment` — verifies the stored payment reference directly with Paystack.
+- `update_fulfilment` — records pickup or delivery after payment has been verified.
 
-Checks the Google Sheet for one specific product and returns its current availability, variant and price.
-
-### `list_available_items`
-
-Returns the limited-drop products that currently have stock available.
-
-### `create_reservation`
-
-Rechecks the selected item, creates a reservation and updates the reserved quantity in the inventory.
-
-### `create_payment`
-
-Creates a Paystack test transaction using the amount stored against the reservation and saves the resulting payment reference.
-
-### `verify_payment`
-
-Verifies the stored payment reference directly with Paystack.
-
-It checks that:
-
-- Paystack reports the payment as successful;
-- the payment belongs to the reservation;
-- the amount received matches the expected amount.
-
-Only then is the reservation treated as paid.
-
-### `update_fulfilment`
-
-Records either `PICKUP` or `DELIVERY` after payment has been successfully verified.
-
-For delivery, the customer's supplied address is also stored.
+The assistant does not treat a customer's message saying they have paid as proof of payment. Payment must first be verified with Paystack.
 
 ## Repository Structure
 
-```text
+```text id="e0n7iv"
 .
 ├── README.md
 ├── FIELD_NOTES.md
+├── GO_LIVE_NOTE.md
 ├── docs/
+│   ├── failure-paths.md
+│   ├── happy-path-conversation.md
+│   └── tool-contracts.md
 ├── skills/
 │   └── papahandmadeit-limited-drop/
 │       └── SKILL.md
 └── tools/
     └── mcp-server/
         ├── src/
-        │   ├── config/
-        │   ├── tools/
-        │   ├── index.ts
-        │   └── server.ts
         ├── package.json
         └── package-lock.json
 ```
 
-The Skill contains the business context, workflow rules, tool-use rules, payment rules and customer conversation behaviour.
-
-The MCP server contains the integrations used by the Skill.
-
-## Running the MCP Server Locally
+## Running the MCP Server
 
 From the repository:
 
-```bash
+```bash id="s5sx0o"
 cd tools/mcp-server
 npm install
 npm start
 ```
 
-The server exposes a Streamable HTTP MCP endpoint at:
+Required configuration includes:
 
-```text
-/mcp
+```text id="dnl7nv"
+GOOGLE_SHEET_ID
+PAYSTACK_SECRET_KEY
+MCP_AUTH_TOKEN
 ```
 
-The deployed version is hosted publicly for Chord to access.
+The Google service-account credentials also need access to the test spreadsheet.
 
-## Required Configuration
+The local `.env`, service-account credentials and `node_modules` are excluded from Git.
 
-The integration requires:
+## Test Setup
 
-- `GOOGLE_SHEET_ID`
-- `PAYSTACK_SECRET_KEY`
-- `MCP_AUTH_TOKEN`
-- Google service-account credentials with access to the test spreadsheet
+This project uses:
 
-All payment credentials used for this exercise are **Paystack test credentials**.
+- Chord for the teammate and Skill;
+- the Chord WhatsApp Simulator for the customer conversation;
+- Google Sheets for test inventory and reservations;
+- Paystack in test mode only;
+- a hosted MCP server for the custom tools.
 
-The local `.env` file, Google service-account credentials and `node_modules` are excluded from Git.
+No real customer data, live Paystack credentials or personal WhatsApp number are used.
 
-No real customer data, live payment keys or personal WhatsApp number is used.
+## Running the Demo
 
-## Google Sheet
+A typical flow is:
 
-The test spreadsheet contains two main tabs.
+```text id="8e6by9"
+Check item
+→ Reserve
+→ Create payment
+→ Customer pays
+→ Verify payment
+→ Record pickup or delivery
+```
 
-### `INVENTORY`
-
-Stores:
-
-- SKU
-- product name
-- variant
-- price
-- total stock
-- reserved quantity
-- sold quantity
-- available quantity
-
-### `RESERVATIONS`
-
-Stores:
-
-- reservation ID
-- SKU
-- quantity
-- expected payment amount
-- reservation status
-- payment reference
-- payment status
-- fulfilment method
-- delivery address
-- creation time
-- payment time
-
-This is intentionally a lightweight data store for the exercise rather than a production database.
-
-## Chord Setup
-
-The project uses:
-
-- a custom Papahandmadeit Skill;
-- the hosted MCP server as the tool connection;
-- bearer authentication for the MCP endpoint;
-- the Chord WhatsApp Simulator for the customer conversation.
-
-The Chord teammate is left active so the workflow can be tested through the simulator.
-
-## Failure Handling
-
-The workflow includes handling for several cases.
-
-If an item becomes unavailable before reservation, the reservation is not created.
-
-If a payment is pending, it is not treated as successful.
-
-If a payment fails, the failed payment is not repeatedly verified as though it could later become successful.
-
-If the reservation is still active, a new payment attempt can be created.
-
-If the reservation itself has expired, been cancelled or been released, inventory must be checked again before creating another reservation.
-
-Fulfilment details cannot be recorded until payment has been successfully verified.
-
-## Current Limitations
-
-This is an exercise build and not a production commerce system.
-
-Before using it with real customers, I would replace or strengthen several areas, including:
-
-- move from Google Sheets to a transactional database or add stronger concurrency controls;
-- connect a real WhatsApp Business number;
-- use live Paystack credentials only after production checks;
-- add payment webhooks instead of relying only on customer-triggered verification;
-- add reservation expiry and automatic stock release;
-- add monitoring and alerts when tools fail;
-- add a clear human handoff path;
-- add business notifications when a paid order is ready for fulfilment.
-
-These are covered further in the go-live note.
+The agent checks inventory again immediately before creating a reservation because stock may have changed after the customer's first enquiry.
 
 ## AI Usage
 
-I used ChatGPT during the exercise mainly to think through the workflow, review some of my implementation decisions, and help when I got stuck during debugging.
+I used ChatGPT during the exercise mainly to think through the workflow, review some implementation decisions and help when I got stuck during debugging.
 
 I still built and tested the integrations myself, including the Google Sheet inventory flow, Paystack test payment flow, MCP server and Chord setup. Where something did not work as expected, I tested it, checked the actual response or error, and adjusted the implementation from there.
 
-## Deployment
+## Notes
 
-The MCP server is deployed on Render and connected to Chord through its public HTTPS `/mcp` endpoint.
+See `FIELD_NOTES.md` for the main problems I encountered while building and testing the project.
 
-The Papahandmadeit teammate is configured and active in Chord, with the WhatsApp Simulator used for the end-to-end test conversation.
-
-See `FIELD_NOTES.md` for the problems encountered during development and deployment.
+See `GO_LIVE_NOTE.md` for what would need to be in place before using the assistant with real Papahandmadeit customers.
