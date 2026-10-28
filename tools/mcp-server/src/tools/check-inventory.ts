@@ -29,24 +29,20 @@ export function registerCheckInventory(
         const query = item_query.trim().toLowerCase();
 
         const match = rows.find((row) => {
-          const sku = String(
-            row[0] ?? ""
-          ).toLowerCase();
+          const sku = String(row[0] ?? "").trim().toLowerCase();
+          const productName = String(row[1] ?? "").trim().toLowerCase();
+          const variant = String(row[2] ?? "").trim().toLowerCase();
 
-          const productName = String(
-            row[1] ?? ""
-          ).toLowerCase();
-
-          const variant = String(
-            row[2] ?? ""
-          ).toLowerCase();
+          const searchableItem = `${productName} ${variant}`.trim();
 
           return (
             sku === query ||
+            query.includes(sku) ||
             productName === query ||
-            sku.includes(query) ||
             productName.includes(query) ||
-            variant.includes(query)
+            query.includes(productName) ||
+            searchableItem.includes(query) ||
+            query.includes(searchableItem)
           );
         });
 
